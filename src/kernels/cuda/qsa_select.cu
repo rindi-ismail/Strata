@@ -623,8 +623,17 @@ __global__ void __launch_bounds__(TK_T) block_topk_reg_kernel(const float* __res
     auto weight = [&](int64_t b) -> int { return b < n_bid ? R : (int) (n_kv - n_bid * R); };
     uint32_t prefix = 0;
     int above = 0;
+#if defined(__HIPCC__)
+    // the digit search as a block suffix scan (256 bins over 8 warps) instead of thread 0's serial walk of up to 255
+    // bins per pass: the same digit (the largest d >= 1 with above + sum(hist[d..255]) >= width, else 0) and the same
+    // count above it.  HIP only (wave32, 8 warps cover the 256 bins); CUDA keeps the walk.
+    __shared__ int s_wt[8];
+#endif
     for (int shift = 24; shift >= 0; shift -= 8) {
         for (int i = lane; i < 256; i += 32) hist[warp][i] = 0;
+#if defined(__HIPCC__)
+        if (t == 0) s_digit = 0;
+#endif
         __syncwarp();
         const uint32_t hi_mask = shift == 24 ? 0u : (0xffffffffu << (shift + 8));
 #pragma unroll
@@ -636,6 +645,27 @@ __global__ void __launch_bounds__(TK_T) block_topk_reg_kernel(const float* __res
             if ((key[j] & hi_mask) == (prefix & hi_mask)) atomicAdd(&hist[warp][(key[j] >> shift) & 255], w);
         }
         __syncthreads();
+#if defined(__HIPCC__)
+        int hv = 0, incl = 0;
+        if (t < 256) {                                // fold the warps' histograms; suffix-scan inside the warp
+            for (int w2 = 0; w2 < TK_T / 32; ++w2) hv += hist[w2][t];
+            incl = hv;
+#pragma unroll
+            for (int o = 1; o < 32; o <<= 1) {
+                const int y = __shfl_down_sync(0xffffffffu, incl, o);
+                if (lane + o < 32) incl += y;
+            }
+            if (lane == 0) s_wt[warp] = incl;
+        }
+        __syncthreads();
+        if (t < 256) {
+            for (int w2 = warp + 1; w2 < 8; ++w2) incl += s_wt[w2];
+            if (t >= 1 && (int64_t) above + incl >= width) atomicMax(&s_digit, t);
+        }
+        __syncthreads();
+        if (t == s_digit) s_above = above + incl - hv;
+        __syncthreads();
+#else
         if (t < 256) {                                // fold the warps' histograms into warp 0's
             int s = 0;
             for (int w2 = 0; w2 < TK_T / 32; ++w2) s += hist[w2][t];
@@ -652,6 +682,7 @@ __global__ void __launch_bounds__(TK_T) block_topk_reg_kernel(const float* __res
             s_above = cum;
         }
         __syncthreads();
+#endif
         prefix |= (uint32_t) s_digit << shift;
         above = s_above;
         __syncthreads();
@@ -1328,7 +1359,16 @@ void qsa_block_topk(const float* scores, const int32_t* steps, int64_t nq, int64
                          (any_card || topk_active_turing_device());
 #endif
     const int64_t reach = counted && active_blocks < max_blocks ? active_blocks : max_blocks;
+#if defined(__HIPCC__)
+    // Decode (no count) with --max-context 262144 has a capacity of 65,538 blocks: past TK_T * TK_PER, so it used to
+    // fall to the one-CTA ref kernel, which reads every key from memory on each radix pass (2 ms a window at 157K on an
+    // R9700 + 7900 XTX split).  The PER_MAX register kernel holds that capacity (the reason it exists on AMD) and reads
+    // only the live n_bid + 1 blocks; the same ids.  STRATA_TOPK_DECODE_REG=0 keeps the ref kernel for decode.
+    static const bool decode_reg = [] { const char* v = std::getenv("STRATA_TOPK_DECODE_REG"); return v == nullptr || v[0] != '0'; }();
+    const int64_t fit = (int64_t) TK_T * (counted || decode_reg ? TK_PER_MAX : TK_PER);
+#else
     const int64_t fit = (int64_t) TK_T * (counted ? TK_PER_MAX : TK_PER);
+#endif
 #if defined(__HIPCC__)
     constexpr int64_t kRegMinBlocks = 7168;   // gfx1201: below ~28K cells the 1,024-thread kernel's fixed cost loses to the ref
     const bool too_small = counted && reach < kRegMinBlocks;
