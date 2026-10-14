@@ -1,0 +1,55 @@
+{
+  "exe": "/home/rj/llm/strata-src/repo/engine/strata",
+  "args": [
+    "--pack",
+    "/home/rj/llm/strata-data/packs/iq3_s",
+    "--native",
+    "/home/rj/llm/models/qwen38-flash-next-ista/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00001-of-00002.gguf",
+    "--ple-gguf",
+    "/home/rj/llm/models/qwen38-flash-next-ista/Qwen3.8-Flash-Next-GSQ-RCO-IQ3_S-00002-of-00002.gguf",
+    "--expert-profile",
+    "/home/rj/llm/strata-src/repo/data/expert-profile.bin",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto:32768",
+    "--spec",
+    "4",
+    "--spec-min-p",
+    "0.5",
+    "--mtp",
+    "/home/rj/llm/strata-data/mtp/rt",
+    "--max-context",
+    "262144",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768",
+    "--remote-expert-opt",
+    "--pool-workers",
+    "15",
+    "--ple-io",
+    "direct"
+  ],
+  "cwd": "/home/rj/llm/strata-src/repo",
+  "tokenizer": "/home/rj/llm/strata-data/packs/iq3_s/tokenizer",
+  "model_name": "qwen3.8-flash-next-iq3_s",
+  "log": "/home/rj/llm/strata-src/repo/strata-iq3s-default.log",
+  "lib_dirs": [
+    "/opt/rocm/lib"
+  ],
+  "port": 8106,
+  "backend": "hip",
+  "env": {
+    "STRATA_HIPBLASLT_TUNING": "/home/rj/llm/strata-src/repo/tools/hip/gfx1201-hipblaslt-100202.txt:/home/rj/llm/strata-src/repo/tools/hip/gfx1100-hipblaslt-100202.txt",
+    "STRATA_HIP_WMMA": "1",
+    "STRATA_STAGE_TRIM": "1"
+  },
+  "gpu": [
+    1,
+    0
+  ],
+  "gpus_asked": true,
+  "layer_split": "24",
+  "open_browser": false
+}
